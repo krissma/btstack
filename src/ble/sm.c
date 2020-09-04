@@ -2066,6 +2066,10 @@ static void sm_run_activate_connection(void){
                 break;
             case SM_RESPONDER_PH1_PAIRING_REQUEST_RECEIVED:
                 sm_reset_setup();
+
+		if (sm_mitm_options.responder_set_custom_pairing_feature_exchange_callback)
+			sm_mitm_options.responder_set_custom_pairing_feature_exchange_callback(sm_pairing_packet_get_io_capability(sm_connection->sm_m_preq));
+
                 sm_init_setup(sm_connection);
                 // recover pairing request
                 (void)memcpy(&setup->sm_m_preq,
@@ -2074,7 +2078,7 @@ static void sm_run_activate_connection(void){
                 err = sm_stk_generation_init(sm_connection);
 
 #ifdef ENABLE_TESTING_SUPPORT
-            if (0 < test_pairing_failure && test_pairing_failure < SM_REASON_DHKEY_CHECK_FAILED){
+                if (0 < test_pairing_failure && test_pairing_failure < SM_REASON_DHKEY_CHECK_FAILED){
                         log_info("testing_support: respond with pairing failure %u", test_pairing_failure);
                         err = test_pairing_failure;
                     }
@@ -2163,6 +2167,9 @@ static void sm_run(void){
     if (sm_persistent_keys_random_active) return;
 
     bool done;
+
+    if (sm_mitm_options.sm_run_callback)
+	    (*sm_mitm_options.sm_run_callback)();
 
     //
     // non-connection related behaviour
@@ -2358,7 +2365,18 @@ static void sm_run(void){
                 int trigger_start_calculating_local_confirm = 0;
                 uint8_t buffer[65];
                 buffer[0] = SM_CODE_PAIRING_PUBLIC_KEY;
-                //
+
+		if(IS_RESPONDER(connection->sm_role))
+		{
+			if(sm_mitm_options.responder_await_manipulated_pubkey_callback)
+				(*sm_mitm_options.responder_await_manipulated_pubkey_callback)((char *)ec_q);
+		}
+		else
+		{
+			if(sm_mitm_options.initiator_await_manipulated_pubkey_callback)
+				(*sm_mitm_options.initiator_await_manipulated_pubkey_callback)((char *)ec_q);
+		}
+
                 reverse_256(&ec_q[0],  &buffer[1]);
                 reverse_256(&ec_q[32], &buffer[33]);
 
@@ -2428,11 +2446,18 @@ static void sm_run(void){
                 uint8_t buffer[17];
                 buffer[0] = SM_CODE_PAIRING_CONFIRM;
                 reverse_128(setup->sm_local_confirm, &buffer[1]);
-                if (IS_RESPONDER(connection->sm_role)){
+                if (IS_RESPONDER(connection->sm_role))
+		{
+		    if(sm_mitm_options.responder_await_manipulated_confirm_callback)
+			sm_mitm_options.responder_await_manipulated_confirm_callback(setup->sm_local_confirm);
+
                     connection->sm_engine_state = SM_SC_W4_PAIRING_RANDOM;
-                } else {
+                } 
+		else
+		{
                     connection->sm_engine_state = SM_SC_W4_CONFIRMATION;
                 }
+
                 l2cap_send_connectionless(connection->sm_handle, L2CAP_CID_SECURITY_MANAGER_PROTOCOL, (uint8_t*) buffer, sizeof(buffer));
                 sm_timeout_reset(connection);
                 break;
@@ -2455,6 +2480,9 @@ static void sm_run(void){
                     log_info("SM_SC_SEND_PAIRING_RANDOM B");
                     if (IS_RESPONDER(connection->sm_role)){
                         // responder
+			if(sm_mitm_options.responder_await_manipulated_nb_callback)
+				sm_mitm_options.responder_await_manipulated_nb_callback(setup->sm_local_nonce);
+			
                         if (setup->sm_stk_generation_method == NUMERIC_COMPARISON){
                             log_info("SM_SC_SEND_PAIRING_RANDOM B1");
                             connection->sm_engine_state = SM_SC_W2_CALCULATE_G2;
@@ -2464,6 +2492,9 @@ static void sm_run(void){
                         }
                     } else {
                         // initiator
+			if(sm_mitm_options.initiator_await_manipulated_na_callback)
+				sm_mitm_options.initiator_await_manipulated_na_callback(setup->sm_local_nonce);
+
                         connection->sm_engine_state = SM_SC_W4_PAIRING_RANDOM;
                     }
                 }
@@ -3044,6 +3075,10 @@ static void sm_handle_random_result_ph2_tk(void * arg){
         // override with pre-defined passkey
         tk = sm_fixed_passkey_in_display_role;
     }
+
+    if (sm_mitm_options.responder_set_custom_passkey_callback)
+	sm_mitm_options.responder_set_custom_passkey_callback(&tk);
+
     big_endian_store_32(setup->sm_tk, 12, tk);
     if (IS_RESPONDER(connection->sm_role)){
         connection->sm_engine_state = SM_RESPONDER_PH1_SEND_PAIRING_RESPONSE;
@@ -3620,6 +3655,9 @@ static void sm_pdu_handler(uint8_t packet_type, hci_con_handle_t con_handle, uin
                 break;
             }
 
+	    if (sm_mitm_options.initiator_received_pairing_feature_exchange_callback)
+	    	sm_mitm_options.initiator_received_pairing_feature_exchange_callback(setup->sm_stk_generation_method);
+
             // generate random number first, if we need to show passkey
             if (setup->sm_stk_generation_method == PK_RESP_INPUT){
                 btstack_crypto_random_generate(&sm_crypto_random_request, sm_random_data, 8, &sm_handle_random_result_ph2_tk,  (void *)(uintptr_t) sm_conn->sm_handle);
@@ -3707,16 +3745,42 @@ static void sm_pdu_handler(uint8_t packet_type, hci_con_handle_t con_handle, uin
             reverse_256(&packet[01], &setup->sm_peer_q[0]);
             reverse_256(&packet[33], &setup->sm_peer_q[32]);
 
-            // validate public key
-            err = btstack_crypto_ecc_p256_validate_public_key(setup->sm_peer_q);
-            if (err){
-                log_error("sm: peer public key invalid %x", err);
-                sm_pairing_error(sm_conn, SM_REASON_DHKEY_CHECK_FAILED);
-                break;
-            }
+	    if(IS_RESPONDER(sm_conn->sm_role))
+	    {
+	    	if(sm_mitm_options.responder_pub_key_received_callback)
+	    		sm_mitm_options.responder_pub_key_received_callback((char *)&setup->sm_peer_q);
+	    }
+	    else
+	    {
+	    	if(sm_mitm_options.initiator_pub_key_received_callback)
+	    		sm_mitm_options.initiator_pub_key_received_callback((char *)&setup->sm_peer_q);
+	    }
+
+	    // validate public key
+	    if(!sm_mitm_options.turnoff_dhkey_validation)
+	    {
+	    	printf("SM.C: validating DH_KEY");
+	    	err = btstack_crypto_ecc_p256_validate_public_key(setup->sm_peer_q);
+	    	if (err){
+	    		printf("sm: peer public key invalid %x\n", err);
+	    		sm_pairing_error(sm_conn, SM_REASON_DHKEY_CHECK_FAILED);
+	    		break;
+	    	}
+	    }
 
             // start calculating dhkey
             btstack_crypto_ecc_p256_calculate_dhkey(&sm_crypto_ecc_p256_request, setup->sm_peer_q, setup->sm_dhkey, sm_sc_dhkey_calculated, (void*)(uintptr_t) sm_conn->sm_handle);
+
+
+	    if(IS_RESPONDER(sm_conn->sm_role))
+	    {
+	    	if(sm_mitm_options.responder_custom_dh_key_callback)
+	    		sm_mitm_options.responder_custom_dh_key_callback(setup->sm_dhkey);
+	    }
+	    else if(sm_mitm_options.initiator_custom_dh_key_callback)
+	    {
+	    	sm_mitm_options.initiator_custom_dh_key_callback(setup->sm_dhkey);
+	    }
 
 
             log_info("public key received, generation method %u", setup->sm_stk_generation_method);
@@ -3778,6 +3842,9 @@ static void sm_pdu_handler(uint8_t packet_type, hci_con_handle_t con_handle, uin
                 sm_sc_start_calculating_local_confirm(sm_conn);
             } else {
                 // initiator
+		if(sm_mitm_options.initiator_confirm_received_callback)
+			sm_mitm_options.initiator_confirm_received_callback(setup->sm_peer_confirm);
+
                 if (sm_just_works_or_numeric_comparison(setup->sm_stk_generation_method)){
                     btstack_crypto_random_generate(&sm_crypto_random_request, setup->sm_local_nonce, 16, &sm_handle_random_result_sc_next_send_pairing_random, (void*)(uintptr_t) sm_conn->sm_handle);
                 } else {
@@ -3794,6 +3861,17 @@ static void sm_pdu_handler(uint8_t packet_type, hci_con_handle_t con_handle, uin
 
             // received random value
             reverse_128(&packet[1], setup->sm_peer_nonce);
+
+	    if(IS_RESPONDER(sm_conn->sm_role))
+	    {
+	    	if(sm_mitm_options.responder_na_received_callback)
+	    		sm_mitm_options.responder_na_received_callback(setup->sm_peer_nonce);
+	    }
+	    else
+	    {
+	    	if(sm_mitm_options.initiator_nb_received_callback)
+	    		sm_mitm_options.initiator_nb_received_callback(setup->sm_peer_nonce);
+	    }
 
             // validate confirm value if Cb = f4(Pkb, Pka, Nb, z)
             // only check for JUST WORK/NC in initiator role OR passkey entry

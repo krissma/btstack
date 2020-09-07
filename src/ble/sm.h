@@ -259,6 +259,16 @@ void sm_register_sc_oob_data_callback( int (*get_sc_oob_data_callback)(uint8_t a
 /**
  * @BThack callback mods
  */
+
+typedef enum {
+    JUST_WORKS,
+    PK_RESP_INPUT,       // Initiator displays PK, responder inputs PK
+    PK_INIT_INPUT,       // Responder displays PK, initiator inputs PK
+    PK_BOTH_INPUT,       // Only input on both, both input PK
+    NUMERIC_COMPARISON,  // Only numerical compparison (yes/no) on on both sides
+    OOB                  // OOB available on one (SC) or both sides (legacy)
+} stk_generation_method_t;
+
 struct SmMitmOptions{
 	void (*sm_run_callback)(void);
 	void (*initiator_await_manipulated_pubkey_callback)(char *);

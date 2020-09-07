@@ -225,6 +225,7 @@ static int sco_out_addr;
 
 // device path
 static int usb_path_len;
+static uint8_t dev_addr;
 static uint8_t usb_path[USB_MAX_PATH_LEN];
 
 // transport interface state
@@ -248,6 +249,11 @@ void hci_transport_usb_set_path(int len, uint8_t * port_numbers){
     } 
     usb_path_len = len;
     memcpy(usb_path, port_numbers, len);
+}
+
+void hci_transport_usb_set_address(uint8_t _dev_addr)
+{
+        dev_addr = _dev_addr;
 }
 
 //
@@ -986,7 +992,8 @@ static int usb_open(void){
         return -1;
     }
 
-    if (usb_path_len){
+    if (usb_path_len)
+    {
         int i;
         for (i=0;i<num_devices;i++){
             uint8_t port_numbers[USB_MAX_PATH_LEN];
@@ -1019,7 +1026,44 @@ static int usb_open(void){
             printf("USB device with given path not found\n");
             return -1;
         }
-    } else {
+    }
+    else if(dev_addr)
+    {
+		printf("dev: %d\n", dev_addr);
+		for (int i = 0; i < num_devices; i++)
+		{
+			if(libusb_get_device_address(devs[i]) == dev_addr)
+			{
+				printf("using: %d\n", libusb_get_device_address(devs[i]));
+
+				printf("Found Specified USB device\n");
+				handle = try_open_device(devs[i]);
+
+				if (!handle)
+					continue;
+
+				r = prepare_device(handle);
+				if (r < 0) {
+					handle = NULL;
+					continue;
+				}
+
+				dev = devs[i];
+				r = scan_for_bt_endpoints(dev);
+				if (r < 0) {
+					handle = NULL;
+					continue;
+				}
+
+				libusb_state = LIB_USB_INTERFACE_CLAIMED;
+				break;
+			}
+		}
+		if(!handle)
+			printf("Did not find Specified USB device\n");
+    }
+    else
+    {
 
         int deviceIndex = -1;
         while (true){

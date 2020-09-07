@@ -115,6 +115,7 @@ typedef enum {
     CMAC_W4_MLAST
 } cmac_state_t;
 
+/* redefined as *public* to support callbacks
 typedef enum {
     JUST_WORKS,
     PK_RESP_INPUT,       // Initiator displays PK, responder inputs PK
@@ -123,6 +124,7 @@ typedef enum {
     NUMERIC_COMPARISON,  // Only numerical compparison (yes/no) on on both sides
     OOB                  // OOB available on one (SC) or both sides (legacy)
 } stk_generation_method_t;
+*/
 
 typedef enum {
     SM_USER_RESPONSE_IDLE,
@@ -254,7 +256,7 @@ static btstack_linked_list_t sm_address_resolution_general_queue;
 // aes128 crypto engine.
 static sm_aes128_state_t  sm_aes128_state;
 
-// crypto 
+// crypto
 static btstack_crypto_random_t   sm_crypto_random_request;
 static btstack_crypto_aes128_t   sm_crypto_aes128_request;
 #ifdef ENABLE_LE_SECURE_CONNECTIONS
@@ -278,6 +280,8 @@ static btstack_linked_list_t sm_event_handlers;
 static ec_key_generation_state_t ec_key_generation_state;
 static uint8_t ec_q[64];
 #endif
+
+struct SmMitmOptions sm_mitm_options;
 
 //
 // Volume 3, Part H, Chapter 24
@@ -772,7 +776,7 @@ static void sm_setup_tk(void){
         use_oob = sm_pairing_packet_get_oob_data_flag(setup->sm_m_preq) | sm_pairing_packet_get_oob_data_flag(setup->sm_s_pres);
     } else {
         // In LE legacy pairing, the out of band method is used if both the devices have
-        // the other device's out of band authentication data available. 
+        // the other device's out of band authentication data available.
         use_oob = sm_pairing_packet_get_oob_data_flag(setup->sm_m_preq) & sm_pairing_packet_get_oob_data_flag(setup->sm_s_pres);
     }
     if (use_oob){
@@ -2452,7 +2456,7 @@ static void sm_run(void){
 			sm_mitm_options.responder_await_manipulated_confirm_callback(setup->sm_local_confirm);
 
                     connection->sm_engine_state = SM_SC_W4_PAIRING_RANDOM;
-                } 
+                }
 		else
 		{
                     connection->sm_engine_state = SM_SC_W4_CONFIRMATION;
@@ -2482,7 +2486,7 @@ static void sm_run(void){
                         // responder
 			if(sm_mitm_options.responder_await_manipulated_nb_callback)
 				sm_mitm_options.responder_await_manipulated_nb_callback(setup->sm_local_nonce);
-			
+
                         if (setup->sm_stk_generation_method == NUMERIC_COMPARISON){
                             log_info("SM_SC_SEND_PAIRING_RANDOM B1");
                             connection->sm_engine_state = SM_SC_W2_CALCULATE_G2;
@@ -2533,7 +2537,7 @@ static void sm_run(void){
                     key_distribution_flags &= ~SM_KEYDIST_ENC_KEY;
                 }
 #endif
-                // setup in response 
+                // setup in response
                 sm_pairing_packet_set_initiator_key_distribution(setup->sm_s_pres, sm_pairing_packet_get_initiator_key_distribution(setup->sm_m_preq) & key_distribution_flags);
                 sm_pairing_packet_set_responder_key_distribution(setup->sm_s_pres, sm_pairing_packet_get_responder_key_distribution(setup->sm_m_preq) & key_distribution_flags);
 
@@ -3093,8 +3097,8 @@ static void sm_handle_random_result_ph2_tk(void * arg){
                 btstack_crypto_random_generate(&sm_crypto_random_request, setup->sm_local_random, 16, &sm_handle_random_result_ph2_random, (void *)(uintptr_t) connection->sm_handle);
             }
         }
-    }   
-    sm_run(); 
+    }
+    sm_run();
 }
 
 static void sm_handle_random_result_ph3_div(void * arg){
@@ -3878,7 +3882,7 @@ static void sm_pdu_handler(uint8_t packet_type, hci_con_handle_t con_handle, uin
             log_info("SM_SC_W4_PAIRING_RANDOM, responder: %u, just works: %u, passkey used %u, passkey entry %u",
                      IS_RESPONDER(sm_conn->sm_role), sm_just_works_or_numeric_comparison(setup->sm_stk_generation_method),
                      sm_passkey_used(setup->sm_stk_generation_method), sm_passkey_entry(setup->sm_stk_generation_method));
-            if ( (!IS_RESPONDER(sm_conn->sm_role) && sm_just_works_or_numeric_comparison(setup->sm_stk_generation_method)) 
+            if ( (!IS_RESPONDER(sm_conn->sm_role) && sm_just_works_or_numeric_comparison(setup->sm_stk_generation_method))
             ||   (sm_passkey_entry(setup->sm_stk_generation_method)) ) {
                  sm_conn->sm_engine_state = SM_SC_W2_CMAC_FOR_CHECK_CONFIRMATION;
                  break;
@@ -4180,7 +4184,7 @@ void sm_init(void){
     hci_event_callback_registration.callback = &sm_event_packet_handler;
     hci_add_event_handler(&hci_event_callback_registration);
 
-    // 
+    //
     btstack_crypto_init();
 
     // init le_device_db
@@ -4542,6 +4546,11 @@ int gap_reconnect_security_setup_active(hci_con_handle_t con_handle){
     }
     // IRK Lookup Succeeded, re-encryption should be initiated. When done, state gets reset
     return sm_conn->sm_engine_state != SM_INITIATOR_CONNECTED;
+}
+
+void sm_register_mitm_options(struct SmMitmOptions* options)
+{
+        memcpy(&sm_mitm_options, options, sizeof(struct SmMitmOptions));
 }
 
 void sm_set_secure_connections_only_mode(bool enable){
